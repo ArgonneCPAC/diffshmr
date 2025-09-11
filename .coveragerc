@@ -1,0 +1,7 @@
+[run]
+source= diffshmr/
+
+omit =
+    diffshmr/__init__.py
+    diffshmr/_version.py
+    diffshmr/tests/*.py

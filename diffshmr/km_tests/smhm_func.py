@@ -5,7 +5,7 @@ from jax.scipy.special import erf as jsp_erf
 from functools import partial
 from collections import namedtuple
 from scipy.stats import qmc
-from ..diffndhist import tw_ndhist
+from .. import diffndhist
 
 
 # Sigmoid function
@@ -94,6 +94,25 @@ def ms_Moster13_fix_z(theta_moster, mh, z):
     )
 
 
+def default_Moster13_params():
+    """Returns the default Moster et al. (2013) parameters."""
+    theta_Moster = namedtuple(
+        "theta_Moster",
+        ["M_10", "M_11", "N_10", "N_11", "beta_10", "beta_11", "gamma_10", "gamma_11"],
+    )
+    theta_Moster_values = theta_Moster(
+        M_10=11.590,
+        M_11=1.195,
+        N_10=0.0351,
+        N_11=-0.0247,
+        beta_10=1.376,
+        beta_11=-0.826,
+        gamma_10=0.608,
+        gamma_11=0.329,
+    )
+    return theta_Moster_values
+
+
 @jjit
 def ms_Moster13_z0(theta_moster, mh):
     """
@@ -180,6 +199,40 @@ def GSMF(theta, SMHM_model, HMF_model, sigma_ms, ms_array, mh_min, mh_max):
     return gsmf
 
 
+@jjit
+def GSMF_3rSMHM(theta, ms_array):
+    """
+    Galaxy stellar mass function for the three-roll SMHM relation,
+    and the Tinker et al. (2008) halo mass function at z=0.
+    """
+    return GSMF(
+        theta=theta,
+        SMHM_model=three_roll_SMHM,
+        HMF_model=dn_dlnM200m_Tinker08_z0,
+        sigma_ms=theta.sigma_ms,
+        ms_array=ms_array,
+        mh_min=10.0,
+        mh_max=15.5,
+    )
+
+
+@jjit
+def GSMF_bplSMHM(theta, ms_array):
+    """
+    Galaxy stellar mass function for the broken power-law SMHM relation,
+    and the Tinker et al. (2008) halo mass function at z=0.
+    """
+    return GSMF(
+        theta=theta,
+        SMHM_model=broken_power_law_SMHM,
+        HMF_model=dn_dlnM200m_Tinker08_z0,
+        sigma_ms=theta.sigma_ms,
+        ms_array=ms_array,
+        mh_min=10.0,
+        mh_max=15.5,
+    )
+
+
 """
 #----------------------------------------------
 Some auxiliary functions for testing:
@@ -253,20 +306,26 @@ def model_double_Gaussian_ndhist(theta, bins, N_draws):
     par1 = gauss_par(mu1, sig1)
     par2 = gauss_par(mu2, sig2)
 
-    g1_draws = random_draw_inverse_CDF(
-        par1, func_Gaussian, xmin, xmax, N_draws
-    ).reshape((-1, 1))
+    g1_draws = random_draw_inverse_CDF(par1, func_Gaussian, xmin, xmax, N_draws)
 
-    g2_draws = random_draw_inverse_CDF(
-        par2, func_Gaussian, xmin, xmax, N_draws
-    ).reshape((-1, 1))
+    g2_draws = random_draw_inverse_CDF(par2, func_Gaussian, xmin, xmax, N_draws)
 
+    hist1 = tw_ndhist_1D(g1_draws, bins, 1.0)
+    hist2 = tw_ndhist_1D(g2_draws, bins, 1.0)
+
+    return f * hist1 + (1.0 - f) * hist2
+
+
+@jjit
+def tw_ndhist_1D(data, bins, ndsig_by_dbin):
+    """
+    1D histogram with Gaussian kernel smoothing.
+    """
+    x = data.reshape((-1, 1))
     bin_lo = jnp.array(bins[:-1]).reshape((-1, 1))
     bin_hi = jnp.array(bins[1:]).reshape((-1, 1))
     dbin = bins[1] - bins[0]
-    ndsig = jnp.ones_like(g1_draws) * dbin
+    ndsig = jnp.ones_like(x) * (ndsig_by_dbin * dbin)
 
-    hist1 = tw_ndhist(g1_draws, ndsig, bin_lo, bin_hi)
-    hist2 = tw_ndhist(g2_draws, ndsig, bin_lo, bin_hi)
-
-    return f * hist1 + (1.0 - f) * hist2
+    hist = diffndhist.tw_ndhist(x, ndsig, bin_lo, bin_hi)
+    return hist

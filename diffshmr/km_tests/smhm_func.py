@@ -1,3 +1,4 @@
+import jax.random as jran
 import jax.numpy as jnp
 from jax import grad
 from jax import jit as jjit
@@ -163,8 +164,14 @@ def dn_dlnM200m_Tinker08_z0(M):
     return dn_dlnM
 
 
-@jjit
-def GSMF(theta, SMHM_model, HMF_model, sigma_ms, ms_array, mh_min, mh_max):
+@partial(
+    jjit,
+    static_argnums=(
+        1,
+        2,
+    ),
+)
+def lgGSMF(theta, SMHM_model, HMF_model, sigma_ms, ms_array, mh_min, mh_max):
     """
     Galaxy stellar mass function for a given SMHM relation,
     and a given halo mass function.
@@ -196,16 +203,16 @@ def GSMF(theta, SMHM_model, HMF_model, sigma_ms, ms_array, mh_min, mh_max):
         )
         gsmf = gsmf.at[i].set(n_gal / dms * jnp.log(10.0) * dmh)
 
-    return gsmf
+    return jnp.log10(gsmf)
 
 
 @jjit
-def GSMF_3rSMHM(theta, ms_array):
+def lgGSMF_3rSMHM(theta, ms_array):
     """
     Galaxy stellar mass function for the three-roll SMHM relation,
     and the Tinker et al. (2008) halo mass function at z=0.
     """
-    return GSMF(
+    return lgGSMF(
         theta=theta,
         SMHM_model=three_roll_SMHM,
         HMF_model=dn_dlnM200m_Tinker08_z0,
@@ -217,12 +224,12 @@ def GSMF_3rSMHM(theta, ms_array):
 
 
 @jjit
-def GSMF_bplSMHM(theta, ms_array):
+def lgGSMF_bplSMHM(theta, ms_array):
     """
     Galaxy stellar mass function for the broken power-law SMHM relation,
     and the Tinker et al. (2008) halo mass function at z=0.
     """
-    return GSMF(
+    return lgGSMF(
         theta=theta,
         SMHM_model=broken_power_law_SMHM,
         HMF_model=dn_dlnM200m_Tinker08_z0,
@@ -266,8 +273,14 @@ def func_double_Gaussian(theta, x):
     return f * gauss1 + (1.0 - f) * gauss2
 
 
-@partial(jjit, static_argnums=(1,))
-def random_draw_inverse_CDF(theta, model, xmin, xmax, N_draws):
+@partial(
+    jjit,
+    static_argnums=(
+        1,
+        4,
+    ),
+)
+def random_draw_inverse_CDF(theta, model, xmin, xmax, N_draws, key):
     """
     Random draws from a distribution defined by its inverse CDF.
     """
@@ -282,18 +295,23 @@ def random_draw_inverse_CDF(theta, model, xmin, xmax, N_draws):
     # Compute the CDF
     cdf = jnp.cumsum(pdf * dx)
 
+    """
     # Create an array of uniform random numbers
     sampler = qmc.Sobol(d=1, scramble=True)
-    sobol_draws = sampler.random(n=N_draws).flatten()
+    sobol_draws = sampler.random(N_draws).flatten()
     u = jnp.array(sobol_draws)
-
+    """
+    u = jran.uniform(key, N_draws, minval=0.0, maxval=1.0).flatten()
     # Interpolate to get the random draws
     random_draws = jnp.interp(u, cdf, x)
 
     return random_draws
 
 
-@jjit
+@partial(
+    jjit,
+    static_argnums=(2,),
+)
 def model_double_Gaussian_ndhist(theta, bins, N_draws):
     mu1, sig1 = theta.mu1, theta.sig1
     mu2, sig2 = theta.mu2, theta.sig2
@@ -306,14 +324,19 @@ def model_double_Gaussian_ndhist(theta, bins, N_draws):
     par1 = gauss_par(mu1, sig1)
     par2 = gauss_par(mu2, sig2)
 
-    g1_draws = random_draw_inverse_CDF(par1, func_Gaussian, xmin, xmax, N_draws)
-
-    g2_draws = random_draw_inverse_CDF(par2, func_Gaussian, xmin, xmax, N_draws)
+    key = jran.PRNGKey(0)
+    g1_draws = random_draw_inverse_CDF(par1, func_Gaussian, xmin, xmax, N_draws, key)
+    g2_draws = random_draw_inverse_CDF(par2, func_Gaussian, xmin, xmax, N_draws, key)
 
     hist1 = tw_ndhist_1D(g1_draws, bins, 1.0)
     hist2 = tw_ndhist_1D(g2_draws, bins, 1.0)
 
     return f * hist1 + (1.0 - f) * hist2
+
+
+@jjit
+def model_double_Gaussian_ndhist_10K(theta, bins):
+    return model_double_Gaussian_ndhist(theta, bins, 10000)
 
 
 @jjit

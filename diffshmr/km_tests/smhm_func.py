@@ -5,7 +5,6 @@ from jax import jit as jjit
 from jax.scipy.special import erf as jsp_erf
 from functools import partial
 from collections import namedtuple
-from scipy.stats import qmc
 from .. import diffndhist
 
 
